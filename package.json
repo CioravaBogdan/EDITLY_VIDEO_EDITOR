@@ -27,7 +27,7 @@
     "canvas": "^2.11.0",
     "compare-versions": "^6.1.0",
     "cors": "^2.8.5",
-    "express": "^4.21.2",
+    "express": "^5.1.0",
     "execa": "^9.5.2",
     "fabric": "^6.5.4",
     "file-type": "^20.0.0",
