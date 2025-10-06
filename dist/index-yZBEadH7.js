@@ -12,16 +12,26 @@ import { fileURLToPath } from 'url';
 import { createCanvas, ImageData, registerFont } from 'canvas';
 import * as fabric$2 from 'fabric/node';
 import { Rect, FabricImage, Gradient, FabricText, Textbox } from 'fabric/node';
-import GL from 'gl';
-import createShader from 'gl-shader';
+let GL, createShader;
+try {
+  ({ default: GL } = await import('gl'));
+  ({ default: createShader } = await import('gl-shader'));
+} catch (e) {
+  console.warn('[editly] GL not available, transitions will use CPU fallback:', e?.message || e);
+}
 import { readFile } from 'node:fs/promises';
 import fileUrl from 'file-url';
 import { Transform } from 'stream';
 import flatMap$1 from 'lodash-es/flatMap.js';
-import createBuffer from 'gl-buffer';
-import createTexture from 'gl-texture2d';
-import glTransition from 'gl-transition';
-import glTransitions from 'gl-transitions';
+let createBuffer, createTexture, glTransition, glTransitions;
+try {
+  ({ default: createBuffer } = await import('gl-buffer'));
+  ({ default: createTexture } = await import('gl-texture2d'));
+  ({ default: glTransition } = await import('gl-transition'));
+  ({ default: glTransitions } = await import('gl-transitions'));
+} catch (e) {
+  console.warn('[editly] GL transition helpers not available:', e?.message || e);
+}
 import ndarray from 'ndarray';
 import { performance } from 'perf_hooks';
 import { isMainThread, parentPort } from 'worker_threads';
@@ -648,6 +658,33 @@ var fillColor = defineFrameSource(
 );
 
 var gl = defineFrameSource("gl", async ({ width, height, channels, params }) => {
+  // CPU fallback when headless-gl is not available
+  if (!GL || !createShader) {
+    const { speed = 1 } = params || {};
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext("2d");
+    async function readNextFrame(progress) {
+      // Simple animated gradient based on progress
+      const t = (progress * speed) % 1;
+      const g = ctx.createLinearGradient(0, 0, width, height);
+      g.addColorStop(0, `hsl(${Math.floor(360 * t)}, 80%, 55%)`);
+      g.addColorStop(1, `hsl(${(Math.floor(360 * t) + 180) % 360}, 80%, 45%)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, width, height);
+      const img = ctx.getImageData(0, 0, width, height);
+      if (channels === 4) return Buffer.from(img.data);
+      // Strip alpha if needed
+      const out = Buffer.allocUnsafe(width * height * channels);
+      for (let i = 0, j = 0; i < img.data.length && j < out.length; i += 4, j += channels) {
+        out[j] = img.data[i];
+        out[j + 1] = img.data[i + 1];
+        out[j + 2] = img.data[i + 2];
+      }
+      return out;
+    }
+    return { readNextFrame };
+  }
+  // GL path
   const gl = GL(width, height);
   const defaultVertexSrc = `
     attribute vec2 position;
@@ -1325,18 +1362,23 @@ var video = defineFrameSource("video", async (options) => {
     encoding: "buffer",
     buffer: false,
     stdin: "ignore",
-    stdout: { transform },
+    stdout: "pipe",
     stderr: process.stderr,
     // ffmpeg doesn't like to stop, force it
     forceKillAfterDelay: 1e3,
     cancelSignal: controller.signal
   });
+  const stdoutStream = ps.stdout?.pipe(transform);
   ps.catch((err) => {
     if (!err.isCanceled) throw err;
     if (verbose) console.log("ffmpeg process aborted", path);
   });
-  const iterator = ps.iterable();
+  const iterator = stdoutStream?.[Symbol.asyncIterator]?.();
   async function readNextFrame(progress, canvas, time) {
+    if (!iterator) {
+      if (verbose) console.error("No iterator available for ffmpeg stdout", path);
+      return;
+    }
     const { value: rgba, done } = await iterator.next();
     if (done) {
       if (verbose) console.log(path, "ffmpeg video stream ended");
@@ -1675,7 +1717,7 @@ async function createFrameSource({
   };
 }
 
-const { default: createTransition } = glTransition;
+const createTransitionFn = glTransition && (glTransition.default || glTransition) || null;
 const TransitionAliases = {
   "directional-left": { name: "directional", easing: "easeOutExpo", params: { direction: [1, 0] } },
   "directional-right": {
@@ -1686,7 +1728,10 @@ const TransitionAliases = {
   "directional-down": { name: "directional", easing: "easeOutExpo", params: { direction: [0, 1] } },
   "directional-up": { name: "directional", easing: "easeOutExpo", params: { direction: [0, -1] } }
 };
-const AllTransitions = [...glTransitions.map((t) => t.name), ...Object.keys(TransitionAliases)];
+const AllTransitions = [
+  ...Array.isArray(glTransitions) ? glTransitions.map((t) => t.name) : [],
+  ...Object.keys(TransitionAliases)
+];
 function getRandomTransition() {
   return AllTransitions[Math.floor(Math.random() * AllTransitions.length)];
 }
@@ -1710,7 +1755,7 @@ class Transition {
     this.name = options.name;
     this.params = options.params;
     this.easingFunction = options.easing && easings[options.easing] ? easings[options.easing] : linear;
-    if (this.name && this.name !== "dummy") {
+    if (this.name && this.name !== "dummy" && Array.isArray(glTransitions) && createTransitionFn) {
       this.source = glTransitions.find(
         ({ name }) => name.toLowerCase() === this.name?.toLowerCase()
       );
@@ -1718,13 +1763,14 @@ class Transition {
     }
   }
   create({ width, height, channels }) {
+    if (!GL || !createBuffer || !createTexture || !createTransitionFn || !this.source) {
+      // CPU fallback: simple crossfade using easing only
+      return ({ fromFrame, toFrame, progress }) => {
+        return this.easingFunction(progress) > 0.5 ? toFrame : fromFrame;
+      };
+    }
     const gl = GL(width, height);
     const resizeMode = "stretch";
-    if (!gl) {
-      throw new Error(
-        "gl returned null, this probably means that some dependencies are not installed. See README."
-      );
-    }
     function convertFrame(buf) {
       return ndarray(buf, [width, height, channels], [channels, width * channels, 1]);
     }
@@ -1735,7 +1781,7 @@ class Transition {
       const buffer = createBuffer(gl, [-1, -1, -1, 4, 4, -1], gl.ARRAY_BUFFER, gl.STATIC_DRAW);
       let transition;
       try {
-        transition = createTransition(gl, this.source, { resizeMode });
+  transition = createTransitionFn(gl, this.source, { resizeMode });
         gl.clear(gl.COLOR_BUFFER_BIT);
         const fromFrameNdArray = convertFrame(fromFrame);
         const textureFrom = createTexture(gl, fromFrameNdArray);

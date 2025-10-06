@@ -13,25 +13,33 @@ import { Worker } from 'worker_threads';
 import 'assert';
 import 'fs-extra';
 import 'json5';
-import 'os';
-import 'lodash-es';
-import 'p-map';
-import 'compare-versions';
-import 'execa';
-import 'nanoid';
+// Optional GL stack; try to load, but continue without if unavailable
+try {
+  await import('gl');
+  await import('gl-shader');
+  await import('gl-buffer');
+  await import('gl-texture2d');
+  await import('gl-transition');
+  await import('gl-transitions');
+  console.log('GL stack loaded');
+} catch (e) {
+  console.warn('Headless GL not available; continuing without GPU transitions:', e?.message || e);
+}
 import 'url';
 import 'canvas';
 import 'fabric/node';
-import 'gl';
-import 'gl-shader';
+// Disable GL native modules in container unless explicitly enabled
+process.env.DISABLE_EDITLY_GL = process.env.DISABLE_EDITLY_GL || '1';
+if (process.env.DISABLE_EDITLY_GL !== '1') {
+  try { await import('gl'); await import('gl-shader'); } catch {}
+}
 import 'node:fs/promises';
 import 'file-url';
 import 'stream';
 import 'lodash-es/flatMap.js';
-import 'gl-buffer';
-import 'gl-texture2d';
-import 'gl-transition';
-import 'gl-transitions';
+if (process.env.DISABLE_EDITLY_GL !== '1') {
+  try { await import('gl-buffer'); await import('gl-texture2d'); await import('gl-transition'); await import('gl-transitions'); } catch {}
+}
 import 'ndarray';
 import 'perf_hooks';
 
@@ -249,9 +257,7 @@ function buildEncoderArgs(encoder) {
     // Single reference
     "-threads",
     FFMPEG_THREADS,
-    // Use 16 threads
-    "-x264opts",
-    "threads=16:lookahead_threads=8:sliced_threads=1:frame_threads=4",
+    // Encoder threads; drop x264opts for maximum compatibility across builds
     "-tune",
     "zerolatency"
     // Zero latency tuning

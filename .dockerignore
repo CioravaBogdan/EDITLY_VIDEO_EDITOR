@@ -1,0 +1,22 @@
+# VCS
+.git
+.gitignore
+
+# Node
+node_modules
+npm-debug.log
+yarn.lock
+pnpm-lock.yaml
+
+# Local runtime data (mounted at runtime via volumes)
+uploads
+outputs
+temp
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode
+
+# Docker
+*.tar

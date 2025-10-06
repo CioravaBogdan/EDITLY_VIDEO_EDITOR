@@ -1,0 +1,32 @@
+name: editly_video_editor
+
+services:
+  editly:
+    build: .
+    image: editly/dist-runtime:latest
+    container_name: editly-dist-api
+    environment:
+      - PORT=3001
+      - UPLOAD_DIR=/app/uploads
+      - FILES_DIR=/app/files
+      - USE_GPU=false
+    volumes:
+      - ./uploads:/app/uploads
+      - ./files:/app/files
+      - ./outputs:/outputs
+      - ./temp:/app/temp
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "curl -fsS http://localhost:3001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - editly-network
+
+networks:
+  editly-network:
+    driver: bridge
